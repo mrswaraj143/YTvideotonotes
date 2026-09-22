@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { generateNotesFromTranscript } from "@/lib/gemini";
 
-export const maxDuration = 60;
+export const maxDuration = 60; // Max for Vercel Hobby plan. Upgrade to Pro for 300s.
 
 export async function POST(request: Request) {
   try {

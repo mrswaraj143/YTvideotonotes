@@ -182,18 +182,19 @@ export async function generateNotesFromTranscript(
     const partInfo = chunks.length > 1 ? `Part ${i + 1} of ${chunks.length}` : undefined;
 
     if (i > 0) {
-      // Small delay between requests to avoid free tier rate limits
-      await new Promise((resolve) => setTimeout(resolve, 3000));
+      // Small delay between requests to avoid free tier rate limits.
+      // Keep short to fit within Vercel's 60s function timeout.
+      await new Promise((resolve) => setTimeout(resolve, 1000));
     }
 
     let response: any;
-    let retries = 6;
-    let baseDelay = 5000;
+    let retries = 3; // Keep low to fit within Vercel's 60s timeout budget.
+    let baseDelay = 2000;
     
     while (retries > 0) {
       try {
         response = await ai.models.generateContent({
-          model: "gemini-3.6-flash",
+          model: "gemini-2.5-flash",
           contents: buildPrompt(chunk, videoTitle, partInfo),
           config: {
             responseMimeType: "application/json",
@@ -204,9 +205,9 @@ export async function generateNotesFromTranscript(
         break;
       } catch (err: any) {
         if (retries === 1) throw err;
-        console.warn(`Gemini API overloaded on chunk ${i + 1}: ${err.message}. Retrying in ${baseDelay / 1000} seconds...`);
+        console.warn(`Gemini API error on chunk ${i + 1}: ${err.message}. Retrying in ${baseDelay / 1000}s...`);
         await new Promise((resolve) => setTimeout(resolve, baseDelay));
-        baseDelay *= 2; // Exponential backoff (5s, 10s, 20s, 40s, etc.)
+        baseDelay *= 2; // Exponential backoff: 2s, 4s
         retries--;
       }
     }
