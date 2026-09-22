@@ -152,93 +152,44 @@ export async function generateNotesFromTranscript(
 
   const ai = new GoogleGenAI({ apiKey });
 
-  const maxChunkSize = 20000;
-  const chunks: string[] = [];
-  let currentPos = 0;
-  
-  while (currentPos < transcript.length) {
-    let endPos = currentPos + maxChunkSize;
-    if (endPos < transcript.length) {
-      const lastSpace = transcript.lastIndexOf(" ", endPos);
-      if (lastSpace > currentPos) {
-        endPos = lastSpace;
-      }
-    }
-    chunks.push(transcript.slice(currentPos, endPos).trim());
-    currentPos = endPos;
+  // Cap transcript to a single chunk that fits within Vercel Hobby's 60s timeout.
+  // 14,000 chars ≈ a 20-minute video transcript. Gemini processes this in ~15-25s.
+  const MAX_CHARS = 14000;
+  const capped = transcript.length > MAX_CHARS
+    ? transcript.slice(0, transcript.lastIndexOf(" ", MAX_CHARS)).trim()
+    : transcript.trim();
+
+  let response: any;
+  try {
+    response = await ai.models.generateContent({
+      model: "gemini-3.6-flash",
+      contents: buildPrompt(capped, videoTitle),
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: notesSchema,
+        temperature: 0.4,
+      },
+    });
+  } catch (err: any) {
+    throw new Error(`Gemini API error: ${err.message ?? "Unknown error"}`);
   }
 
-  const finalNotes: NotesDocument = {
-    title: "",
-    subtitle: "",
-    tags: [],
-    contentsTable: [],
-    sections: [],
-    cheatSheetRecap: [],
-  };
+  const text = response.text;
+  if (!text) throw new Error("Gemini returned an empty response.");
 
-  for (let i = 0; i < chunks.length; i++) {
-    const chunk = chunks[i];
-    const partInfo = chunks.length > 1 ? `Part ${i + 1} of ${chunks.length}` : undefined;
-
-    if (i > 0) {
-      // Small delay between requests to avoid free tier rate limits.
-      // Keep short to fit within Vercel's 60s function timeout.
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-    }
-
-    let response: any;
-    let retries = 3; // Keep low to fit within Vercel's 60s timeout budget.
-    let baseDelay = 2000;
-    
-    while (retries > 0) {
-      try {
-        response = await ai.models.generateContent({
-          model: "gemini-3.6-flash",
-          contents: buildPrompt(chunk, videoTitle, partInfo),
-          config: {
-            responseMimeType: "application/json",
-            responseSchema: notesSchema,
-            temperature: 0.4,
-          },
-        });
-        break;
-      } catch (err: any) {
-        if (retries === 1) throw err;
-        console.warn(`Gemini API error on chunk ${i + 1}: ${err.message}. Retrying in ${baseDelay / 1000}s...`);
-        await new Promise((resolve) => setTimeout(resolve, baseDelay));
-        baseDelay *= 2; // Exponential backoff: 2s, 4s
-        retries--;
-      }
-    }
-
-    const text = response.text;
-    if (!text) throw new Error(`Gemini returned an empty response on chunk ${i + 1}.`);
-
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(text);
-    } catch {
-      throw new Error(`Gemini returned invalid JSON on chunk ${i + 1}.`);
-    }
-
-    const notes = normalizeNotes(parsed);
-
-    if (i === 0) {
-      finalNotes.title = notes.title;
-      finalNotes.subtitle = notes.subtitle;
-      finalNotes.tags = notes.tags;
-    }
-
-    finalNotes.sections.push(...notes.sections);
-    finalNotes.cheatSheetRecap.push(...notes.cheatSheetRecap);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new Error("Gemini returned invalid JSON. Please try again.");
   }
 
-  finalNotes.contentsTable = finalNotes.sections.map((s) => s.sectionTitle);
+  const notes = normalizeNotes(parsed);
+  notes.contentsTable = notes.sections.map((s) => s.sectionTitle);
 
-  if (!finalNotes.sections.length) {
-    throw new Error("Gemini did not produce any note sections across all chunks.");
+  if (!notes.sections.length) {
+    throw new Error("Gemini did not produce any note sections. Please try again.");
   }
 
-  return finalNotes;
+  return notes;
 }
