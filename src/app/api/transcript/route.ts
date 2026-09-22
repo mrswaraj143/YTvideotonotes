@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
 import { extractVideoId, fetchYoutubeTranscript } from "@/lib/youtube";
 
+// Increase timeout for external API calls (Supadata, YouTube scraping).
+export const maxDuration = 30;
+
 export async function POST(request: Request) {
   try {
     const body = (await request.json()) as { url?: string };

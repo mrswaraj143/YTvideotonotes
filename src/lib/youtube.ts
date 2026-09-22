@@ -74,6 +74,41 @@ function extractWatchTitle(html: string): string | undefined {
   return decodeHtml(match[1]).replace(/\s*-\s*YouTube\s*$/, "").trim();
 }
 
+async function fetchViaSupadata(videoId: string): Promise<{
+  cues: { text: string; offset: number; duration: number }[];
+  language?: string;
+  title?: string;
+} | null> {
+  const apiKey = process.env.SUPADATA_API_KEY;
+  if (!apiKey) return null;
+
+  try {
+    const res = await fetch(
+      `https://api.supadata.ai/v1/youtube/transcript?videoId=${videoId}&lang=en`,
+      { headers: { "x-api-key": apiKey } }
+    );
+    if (!res.ok) return null;
+
+    const data = await res.json() as {
+      content?: { text: string; offset: number; duration: number }[];
+      lang?: string;
+    };
+    if (!data?.content?.length) return null;
+
+    return {
+      cues: data.content.map((item) => ({
+        text: item.text.replace(/\s+/g, " ").trim(),
+        offset: item.offset,
+        duration: item.duration,
+      })),
+      language: data.lang ?? "en",
+      title: undefined,
+    };
+  } catch {
+    return null;
+  }
+}
+
 async function fetchTimedText(videoId: string): Promise<{
   cues: { text: string; offset: number; duration: number }[];
   language?: string;
@@ -117,6 +152,11 @@ async function fetchTimedText(videoId: string): Promise<{
 }
 
 export async function fetchYoutubeTranscript(videoId: string) {
+  // 1. Try Supadata API first — works reliably on Vercel (avoids YouTube IP blocking).
+  const supadataResult = await fetchViaSupadata(videoId);
+  if (supadataResult) return supadataResult;
+
+  // 2. Try youtube-transcript package.
   try {
     const { YoutubeTranscript } = await import("youtube-transcript");
     const items = await YoutubeTranscript.fetchTranscript(videoId);
@@ -135,5 +175,6 @@ export async function fetchYoutubeTranscript(videoId: string) {
     // Fall through to timedtext scrape.
   }
 
+  // 3. Fallback: direct YouTube scrape (works locally, may be blocked on cloud IPs).
   return fetchTimedText(videoId);
 }
